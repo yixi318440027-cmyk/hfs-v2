@@ -17,6 +17,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/permission"
 	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/vfs"
 	"gopkg.in/yaml.v3"
 )
@@ -116,6 +117,12 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Get("/download-counts", s.handleAdminGetDownloadCounts)
 		r.Get("/connections", s.handleAdminGetConnections)
 		r.Get("/disk-usage", s.handleAdminGetDiskUsage)
+		// Permissions management.
+		r.Get("/permissions", s.handleAdminGetPermissions)
+		r.Post("/permissions", s.handleAdminSetPermission)
+		r.Put("/permissions", s.handleAdminSetPermission)
+		r.Delete("/permissions", s.handleAdminDeletePermission)
+		r.Post("/permissions/batch", s.handleAdminSetPermissionBatch)
 	})
 
 	// Serve frontend SPA (static files + fallback to index.html).
@@ -217,6 +224,13 @@ func (s *Server) handleListDir(w http.ResponseWriter, r *http.Request) {
 		path = "/Files"
 	}
 
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, path, permission.PermList) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have list access to this path")
+		return
+	}
+
 	entry, err := s.vfs.ListDir(path)
 	if err != nil {
 		jsonError(w, http.StatusNotFound, err.Error())
@@ -231,6 +245,13 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	vfsPath := r.URL.Query().Get("path")
 	if vfsPath == "" {
 		jsonError(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, vfsPath, permission.PermRead) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have read access to this file")
 		return
 	}
 
@@ -256,6 +277,13 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
 		jsonError(w, http.StatusBadRequest, "path parameter is required")
+		return
+	}
+
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, path, permission.PermDelete) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have delete access to this path")
 		return
 	}
 
@@ -288,6 +316,13 @@ func (s *Server) handleRename(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, req.Path, permission.PermUpload) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have write access to this path")
+		return
+	}
+
 	if err := s.vfs.RenamePath(req.Path, req.NewName); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -314,6 +349,13 @@ func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Path == "" || req.DirName == "" {
 		jsonError(w, http.StatusBadRequest, "path and dirName are required")
+		return
+	}
+
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, req.Path, permission.PermUpload) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have upload access to this path")
 		return
 	}
 
@@ -352,6 +394,13 @@ func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
 	dirPath := r.FormValue("path")
 	if dirPath == "" {
 		dirPath = "/Files"
+	}
+
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, dirPath, permission.PermUpload) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have upload access to this path")
+		return
 	}
 
 	var uploaded []UploadedFile
@@ -420,6 +469,12 @@ func (s *Server) handleBatchDelete(w http.ResponseWriter, r *http.Request) {
 
 	var results []DeleteResult
 	for _, p := range req.Paths {
+		username, _ := r.Context().Value("username").(string)
+		role, _ := r.Context().Value("role").(string)
+		if !s.perm.Can(username, role, p, permission.PermDelete) {
+			results = append(results, DeleteResult{Path: p, Error: "permission denied"})
+			continue
+		}
 		if err := s.vfs.DeletePath(p); err != nil {
 			results = append(results, DeleteResult{Path: p, Error: err.Error()})
 		} else {
@@ -442,7 +497,13 @@ func (s *Server) handleDownloadZip(w http.ResponseWriter, r *http.Request) {
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+
 	for _, vfsPath := range paths {
+		if !s.perm.Can(username, role, vfsPath, permission.PermArchive) {
+			continue // skip paths without archive permission
+		}
 		localPath, _, err := s.vfs.GetFilePath(vfsPath)
 		if err != nil {
 			continue // skip paths that cannot be resolved
@@ -659,6 +720,13 @@ func (s *Server) handleUpdateComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	username, _ := r.Context().Value("username").(string)
+	role, _ := r.Context().Value("role").(string)
+	if !s.perm.Can(username, role, req.Path, permission.PermUpload) {
+		jsonError(w, http.StatusForbidden, "permission denied: you do not have write access to this path")
+		return
+	}
+
 	if err := s.vfs.UpdateFileComment(req.Path, req.Comment); err != nil {
 		jsonError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -827,4 +895,160 @@ func detectMIME(name string) string {
 		return "application/octet-stream"
 	}
 	return m
+}
+
+// --- Permission management handlers (admin only) ---
+
+// handleAdminGetPermissions handles GET /api/admin/permissions?username=alice&vfsPath=/Files
+func (s *Server) handleAdminGetPermissions(w http.ResponseWriter, r *http.Request) {
+	username := r.URL.Query().Get("username")
+	vfsPath := r.URL.Query().Get("vfsPath")
+
+	var records []permission.PermissionRecord
+	var err error
+
+	if username != "" {
+		records, err = s.perm.ListForUser(username)
+	} else {
+		records, err = s.perm.ListAll(vfsPath)
+	}
+
+	if err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if records == nil {
+		records = []permission.PermissionRecord{}
+	}
+	jsonOK(w, records)
+}
+
+// handleAdminSetPermission handles POST/PUT /api/admin/permissions
+func (s *Server) handleAdminSetPermission(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Username   string `json:"username"`
+		VFSPath    string `json:"vfsPath"`
+		CanSee     *bool  `json:"canSee"`
+		CanRead    *bool  `json:"canRead"`
+		CanList    *bool  `json:"canList"`
+		CanUpload  *bool  `json:"canUpload"`
+		CanDelete  *bool  `json:"canDelete"`
+		CanArchive *bool  `json:"canArchive"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Username == "" || req.VFSPath == "" {
+		jsonError(w, http.StatusBadRequest, "username and vfsPath are required")
+		return
+	}
+
+	ps := permission.DefaultPerms()
+	if req.CanSee != nil {
+		ps.CanSee = *req.CanSee
+	}
+	if req.CanRead != nil {
+		ps.CanRead = *req.CanRead
+	}
+	if req.CanList != nil {
+		ps.CanList = *req.CanList
+	}
+	if req.CanUpload != nil {
+		ps.CanUpload = *req.CanUpload
+	}
+	if req.CanDelete != nil {
+		ps.CanDelete = *req.CanDelete
+	}
+	if req.CanArchive != nil {
+		ps.CanArchive = *req.CanArchive
+	}
+
+	if err := s.perm.Set(req.Username, req.VFSPath, ps); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"username": req.Username,
+		"vfsPath":  req.VFSPath,
+		"perms":    ps,
+	})
+}
+
+// handleAdminDeletePermission handles DELETE /api/admin/permissions?id=1
+func (s *Server) handleAdminDeletePermission(w http.ResponseWriter, r *http.Request) {
+	idStr := r.URL.Query().Get("id")
+	if idStr == "" {
+		jsonError(w, http.StatusBadRequest, "id parameter is required")
+		return
+	}
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid id")
+		return
+	}
+
+	if err := s.perm.Delete(id); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonOK(w, map[string]int{"deleted": id})
+}
+
+// handleAdminSetPermissionBatch handles POST /api/admin/permissions/batch
+func (s *Server) handleAdminSetPermissionBatch(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Usernames  []string `json:"usernames"`
+		VFSPath    string   `json:"vfsPath"`
+		CanSee     *bool    `json:"canSee"`
+		CanRead    *bool    `json:"canRead"`
+		CanList    *bool    `json:"canList"`
+		CanUpload  *bool    `json:"canUpload"`
+		CanDelete  *bool    `json:"canDelete"`
+		CanArchive *bool    `json:"canArchive"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if len(req.Usernames) == 0 || req.VFSPath == "" {
+		jsonError(w, http.StatusBadRequest, "usernames and vfsPath are required")
+		return
+	}
+
+	ps := permission.DefaultPerms()
+	if req.CanSee != nil {
+		ps.CanSee = *req.CanSee
+	}
+	if req.CanRead != nil {
+		ps.CanRead = *req.CanRead
+	}
+	if req.CanList != nil {
+		ps.CanList = *req.CanList
+	}
+	if req.CanUpload != nil {
+		ps.CanUpload = *req.CanUpload
+	}
+	if req.CanDelete != nil {
+		ps.CanDelete = *req.CanDelete
+	}
+	if req.CanArchive != nil {
+		ps.CanArchive = *req.CanArchive
+	}
+
+	if err := s.perm.SetBatch(req.Usernames, req.VFSPath, ps); err != nil {
+		jsonError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonOK(w, map[string]interface{}{
+		"usernames": req.Usernames,
+		"vfsPath":   req.VFSPath,
+		"perms":     ps,
+	})
 }

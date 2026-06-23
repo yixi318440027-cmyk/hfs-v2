@@ -11,6 +11,7 @@ import (
 	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/auth"
 	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/config"
 	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/db"
+	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/permission"
 	"github.com/yixi318440027-cmyk/hfs-v2/src/internal/vfs"
 )
 
@@ -29,6 +30,7 @@ type Server struct {
 	vfs         *vfs.VFS
 	db          *db.DB
 	auth        *auth.AuthService
+	perm        *permission.Engine
 	router      http.Handler
 	connMu      sync.RWMutex
 	connections map[string]*ConnInfo // keyed by IP
@@ -59,6 +61,7 @@ func NewServer(cfg *config.Config) *Server {
 		vfs:         vfs.NewVFS(cfg.VFS.Roots),
 		db:          database,
 		auth:        authSvc,
+		perm:        permission.NewEngine(database.Conn()),
 		connections: make(map[string]*ConnInfo),
 	}
 	// Wire database to VFS for metadata queries.

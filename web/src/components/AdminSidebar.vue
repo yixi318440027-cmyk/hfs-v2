@@ -7,6 +7,7 @@ const route = useRoute()
 const adminMenus = [
   { label: '仪表盘', icon: 'layout-dashboard', path: '/admin/dashboard' },
   { label: '用户管理', icon: 'users', path: '/admin/users' },
+  { label: '权限管理', icon: 'shield', path: '/admin/permissions' },
   { label: '系统配置', icon: 'settings', path: '/admin/config' },
   { label: '日志查看', icon: 'scroll-text', path: '/admin/logs' },
 ]

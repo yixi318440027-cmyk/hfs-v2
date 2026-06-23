@@ -114,5 +114,26 @@ func (d *DB) migrate() error {
 		return err
 	}
 
+	// permissions table: per-user per-path fine-grained access control.
+	_, err = d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS permissions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			username TEXT NOT NULL,
+			vfs_path TEXT NOT NULL,
+			can_see INTEGER NOT NULL DEFAULT 1,
+			can_read INTEGER NOT NULL DEFAULT 1,
+			can_list INTEGER NOT NULL DEFAULT 1,
+			can_upload INTEGER NOT NULL DEFAULT 0,
+			can_delete INTEGER NOT NULL DEFAULT 0,
+			can_archive INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+			UNIQUE(username, vfs_path)
+		);
+	`)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }
