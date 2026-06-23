@@ -9,18 +9,24 @@ const authStore = useAuthStore()
 const username = ref('')
 const password = ref('')
 const error = ref('')
+const loading = ref(false)
 
-function handleLogin() {
+async function handleLogin() {
+  error.value = ''
+
   if (!username.value || !password.value) {
     error.value = '请输入用户名和密码'
     return
   }
 
-  const success = authStore.login(username.value, password.value)
+  loading.value = true
+  const success = await authStore.login(username.value, password.value)
+  loading.value = false
+
   if (success) {
     router.push('/')
   } else {
-    error.value = '登录失败'
+    error.value = '用户名或密码错误'
   }
 }
 </script>
@@ -38,7 +44,9 @@ function handleLogin() {
         密码
         <input v-model="password" type="password" placeholder="请输入密码" />
       </label>
-      <button type="submit">登录</button>
+      <button type="submit" :disabled="loading">
+        {{ loading ? '登录中...' : '登录' }}
+      </button>
     </form>
   </div>
 </template>
@@ -113,7 +121,12 @@ button {
   margin-top: 8px;
 }
 
-button:hover {
+button:hover:not(:disabled) {
   background: #4096ff;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 </style>
