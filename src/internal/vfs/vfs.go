@@ -1,6 +1,7 @@
 package vfs
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -16,11 +17,16 @@ import (
 
 // FileInfo represents a file or directory entry in the VFS.
 type FileInfo struct {
-	Name    string    `json:"name"`
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"modTime"`
-	IsDir   bool      `json:"isDir"`
-	MIME    string    `json:"mime,omitempty"`
+	Name       string    `json:"name"`
+	Size       int64     `json:"size"`
+	SizeHuman  string    `json:"sizeHuman,omitempty"`
+	ModTime    time.Time `json:"modTime"`
+	IsDir      bool      `json:"isDir"`
+	MIME       string    `json:"mime,omitempty"`
+	Comment    string    `json:"comment,omitempty"`
+	UploadedBy string    `json:"uploadedBy,omitempty"`
+	CreatedAt  string    `json:"createdAt,omitempty"`
+	Downloads  int64     `json:"downloads,omitempty"`
 }
 
 // DirEntry represents the contents of a directory in the VFS.
@@ -34,10 +40,34 @@ type DirEntry struct {
 // VFS represents the virtual file system.
 type VFS struct {
 	roots []config.VFSRoot
+	db    *sql.DB
+}
+
+// SetDB sets the database connection for file metadata queries.
+func (v *VFS) SetDB(db *sql.DB) {
+	v.db = db
+}
+
+// PublicRoots returns all VFSRoot entries that are marked as public.
+func (v *VFS) PublicRoots() []config.VFSRoot {
+	var out []config.VFSRoot
+	for _, r := range v.roots {
+		if r.Public {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // NewVFS creates a new VFS instance with the given roots.
+// It ensures all root directories exist on disk.
 func NewVFS(roots []config.VFSRoot) *VFS {
+	for _, root := range roots {
+		if err := os.MkdirAll(root.Path, 0755); err != nil {
+			// Log a warning but don't fail — the directory might be created later.
+			fmt.Fprintf(os.Stderr, "vfs: failed to create root %q: %v\n", root.Path, err)
+		}
+	}
 	return &VFS{roots: roots}
 }
 
@@ -90,10 +120,45 @@ func (v *VFS) GetFilePath(vfsPath string) (string, *config.VFSRoot, error) {
 	return localPath, root, nil
 }
 
+// enrichFileMeta fills in Comment, UploadedBy, CreatedAt, Downloads, and SizeHuman
+// from the database for each file in the list.
+func (v *VFS) enrichFileMeta(vfsPath string, files []FileInfo) {
+	if v.db == nil {
+		// No DB set; still fill SizeHuman
+		for i := range files {
+			files[i].SizeHuman = FormatSize(files[i].Size)
+		}
+		return
+	}
+
+	// Batch load download counts for all files in this directory.
+	for i := range files {
+		fp := vfsPath + "/" + files[i].Name
+		var count int64
+		v.db.QueryRow("SELECT count FROM download_counts WHERE vfs_path = ?", fp).Scan(&count)
+		files[i].Downloads = count
+		files[i].SizeHuman = FormatSize(files[i].Size)
+
+		// Load metadata.
+		var comment, uploadedBy, createdAt string
+		err := v.db.QueryRow("SELECT comment, uploaded_by, created_at FROM files_meta WHERE vfs_path = ?", fp).Scan(&comment, &uploadedBy, &createdAt)
+		if err == nil {
+			files[i].Comment = comment
+			files[i].UploadedBy = uploadedBy
+			files[i].CreatedAt = createdAt
+		}
+	}
+}
+
 // ListDir lists the contents of a directory at the given VFS path.
 func (v *VFS) ListDir(vfsPath string) (*DirEntry, error) {
 	localPath, root, err := v.GetFilePath(vfsPath)
 	if err != nil {
+		return nil, err
+	}
+
+	// Ensure the directory exists (create if it's a VFS root).
+	if err := os.MkdirAll(localPath, 0755); err != nil {
 		return nil, err
 	}
 
@@ -140,6 +205,79 @@ func (v *VFS) ListDir(vfsPath string) (*DirEntry, error) {
 	relDisplay := strings.TrimPrefix(vfsPath, "/"+root.Name)
 	if relDisplay == "" {
 		relDisplay = "/"
+	}
+
+	// Enrich with metadata from database.
+	v.enrichFileMeta(vfsPath, files)
+
+	return &DirEntry{
+		Path:  relDisplay,
+		Name:  root.Name,
+		Files: files,
+		Total: len(files),
+	}, nil
+}
+
+// ListDirPublic lists a directory under a Public VFS root.
+// Returns an error if the root is not public.
+func (v *VFS) ListDirPublic(vfsPath string) (*DirEntry, error) {
+	localPath, root, err := v.GetFilePath(vfsPath)
+	if err != nil {
+		return nil, err
+	}
+	if !root.Public {
+		return nil, errors.New("access denied: root is not public")
+	}
+	// Reuse ListDir logic but pass through the already-resolved info.
+	// Ensure the directory exists.
+	if err := os.MkdirAll(localPath, 0755); err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(localPath)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%q is not a directory", vfsPath)
+	}
+	entries, err := os.ReadDir(localPath)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]FileInfo, 0, len(entries))
+	for _, e := range entries {
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		f := FileInfo{
+			Name:    e.Name(),
+			Size:    fi.Size(),
+			ModTime: fi.ModTime(),
+			IsDir:   e.IsDir(),
+		}
+		if !e.IsDir() {
+			f.MIME = detectMIME(e.Name())
+		}
+		files = append(files, f)
+	}
+	// Sort: directories first, then by name alphabetically
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].IsDir != files[j].IsDir {
+			return files[i].IsDir
+		}
+		return strings.ToLower(files[i].Name) < strings.ToLower(files[j].Name)
+	})
+	relDisplay := strings.TrimPrefix(vfsPath, "/"+root.Name)
+	if relDisplay == "" {
+		relDisplay = "/"
+	}
+
+	// Enrich with metadata from database (public-only: no uploadedBy).
+	v.enrichFileMeta(vfsPath, files)
+	// Strip uploadedBy for public view.
+	for i := range files {
+		files[i].UploadedBy = ""
 	}
 
 	return &DirEntry{
@@ -201,13 +339,9 @@ func (v *VFS) CreateDir(vfsPath, dirName string) error {
 		return errors.New("root is read-only")
 	}
 
-	// Ensure parent is a directory
-	info, err := os.Stat(parentPath)
-	if err != nil {
+	// Ensure parent exists.
+	if err := os.MkdirAll(parentPath, 0755); err != nil {
 		return err
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%q is not a directory", vfsPath)
 	}
 
 	newPath := filepath.Join(parentPath, dirName)
@@ -248,6 +382,24 @@ func (v *VFS) UploadFile(vfsPath string, reader io.Reader) error {
 	return nil
 }
 
+// FormatSize returns a human-readable file size string (1024-based).
+func FormatSize(bytes int64) string {
+	if bytes == 0 {
+		return "0 B"
+	}
+	units := []string{"B", "KB", "MB", "GB", "TB"}
+	i := 0
+	size := float64(bytes)
+	for size >= 1024 && i < len(units)-1 {
+		size /= 1024
+		i++
+	}
+	if i > 0 {
+		return fmt.Sprintf("%.1f %s", size, units[i])
+	}
+	return fmt.Sprintf("%.0f %s", size, units[i])
+}
+
 // splitPath splits a VFS path into segments, removing empty parts.
 func splitPath(p string) []string {
 	p = filepath.ToSlash(p)
@@ -256,6 +408,71 @@ func splitPath(p string) []string {
 		return nil
 	}
 	return strings.Split(p, "/")
+}
+
+// IncrementDownload increments the download count for a VFS path.
+func (v *VFS) IncrementDownload(vfsPath string) {
+	if v.db == nil {
+		return
+	}
+	v.db.Exec(`
+		INSERT INTO download_counts (vfs_path, count, last_download_at) VALUES (?, 1, datetime('now'))
+		ON CONFLICT(vfs_path) DO UPDATE SET count = count + 1, last_download_at = datetime('now')
+	`, vfsPath)
+}
+
+// SetFileMeta sets metadata for a file at the given VFS path.
+func (v *VFS) SetFileMeta(vfsPath, uploadedBy string) {
+	if v.db == nil {
+		return
+	}
+	v.db.Exec(`
+		INSERT INTO files_meta (vfs_path, uploaded_by, created_at) VALUES (?, ?, datetime('now'))
+		ON CONFLICT(vfs_path) DO UPDATE SET uploaded_by = excluded.uploaded_by
+	`, vfsPath, uploadedBy)
+}
+
+// UpdateFileComment updates the comment for a VFS path.
+func (v *VFS) UpdateFileComment(vfsPath, comment string) error {
+	if v.db == nil {
+		return errors.New("database not available")
+	}
+	_, err := v.db.Exec(`
+		INSERT INTO files_meta (vfs_path, comment) VALUES (?, ?)
+		ON CONFLICT(vfs_path) DO UPDATE SET comment = excluded.comment
+	`, vfsPath, comment)
+	return err
+}
+
+// GetDownloadCounts returns all download counts (admin use).
+func (v *VFS) GetDownloadCounts() ([]map[string]interface{}, error) {
+	if v.db == nil {
+		return nil, errors.New("database not available")
+	}
+	rows, err := v.db.Query("SELECT vfs_path, count, last_download_at FROM download_counts ORDER BY count DESC")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []map[string]interface{}
+	for rows.Next() {
+		var path string
+		var count int64
+		var lastAt string
+		if err := rows.Scan(&path, &count, &lastAt); err != nil {
+			continue
+		}
+		results = append(results, map[string]interface{}{
+			"path":            path,
+			"count":           count,
+			"lastDownloadAt":  lastAt,
+		})
+	}
+	if results == nil {
+		results = []map[string]interface{}{}
+	}
+	return results, nil
 }
 
 // detectMIME returns the MIME type for a file based on its extension.

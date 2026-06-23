@@ -89,5 +89,30 @@ func (d *DB) migrate() error {
 		return err
 	}
 
+	// download_counts table: tracks per-file download count.
+	_, err = d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS download_counts (
+			vfs_path TEXT PRIMARY KEY,
+			count INTEGER NOT NULL DEFAULT 0,
+			last_download_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+	`)
+	if err != nil {
+		return err
+	}
+
+	// files_meta table: stores file metadata (comment, uploaded_by, created_at).
+	_, err = d.conn.Exec(`
+		CREATE TABLE IF NOT EXISTS files_meta (
+			vfs_path TEXT PRIMARY KEY,
+			comment TEXT NOT NULL DEFAULT '',
+			uploaded_by TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		);
+	`)
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

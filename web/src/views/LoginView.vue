@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { refreshLucide } from '../utils/lucide'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -29,25 +30,57 @@ async function handleLogin() {
     error.value = '用户名或密码错误'
   }
 }
+
+onMounted(() => {
+  nextTick(() => refreshLucide())
+})
 </script>
 
 <template>
   <div class="login-container">
-    <form class="login-form" @submit.prevent="handleLogin">
-      <h1>hfs-v2 登录</h1>
-      <div v-if="error" class="error">{{ error }}</div>
-      <label>
-        用户名
-        <input v-model="username" type="text" placeholder="请输入用户名" />
-      </label>
-      <label>
-        密码
-        <input v-model="password" type="password" placeholder="请输入密码" />
-      </label>
-      <button type="submit" :disabled="loading">
-        {{ loading ? '登录中...' : '登录' }}
-      </button>
-    </form>
+    <div class="login-card">
+      <div class="login-header">
+        <i data-lucide="hard-drive" style="width:28px;height:28px;color:var(--c-primary)"></i>
+        <h1>hfs-v2</h1>
+        <p>轻量级文件服务器</p>
+      </div>
+      <form class="login-form" @submit.prevent="handleLogin">
+        <div v-if="error" class="alert alert-error">
+          <i data-lucide="alert-circle" style="width:14px;height:14px"></i>
+          {{ error }}
+        </div>
+        <div class="form-group">
+          <label for="username">用户名</label>
+          <div class="input-wrap">
+            <i data-lucide="user" style="width:14px;height:14px" class="input-icon"></i>
+            <input
+              id="username"
+              v-model="username"
+              type="text"
+              placeholder="请输入用户名"
+              autocomplete="username"
+            />
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="password">密码</label>
+          <div class="input-wrap">
+            <i data-lucide="lock" style="width:14px;height:14px" class="input-icon"></i>
+            <input
+              id="password"
+              v-model="password"
+              type="password"
+              placeholder="请输入密码"
+              autocomplete="current-password"
+            />
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary login-btn" :disabled="loading">
+          <i v-if="!loading" data-lucide="log-in" style="width:14px;height:14px"></i>
+          {{ loading ? '登录中...' : '登录' }}
+        </button>
+      </form>
+    </div>
   </div>
 </template>
 
@@ -57,76 +90,100 @@ async function handleLogin() {
   justify-content: center;
   align-items: center;
   min-height: 100vh;
-  background: #f0f2f5;
+  background: var(--c-bg);
+}
+
+.login-card {
+  background: var(--c-white);
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  padding: 40px;
+  width: 380px;
+  box-shadow: var(--shadow-card);
+}
+
+.login-header {
+  text-align: center;
+  margin-bottom: 28px;
+}
+
+.login-header h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--c-text);
+  margin: 8px 0 4px;
+}
+
+.login-header p {
+  font-size: 13px;
+  color: var(--c-text-muted);
+  margin: 0;
 }
 
 .login-form {
-  background: #fff;
-  padding: 40px;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  width: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 
-h1 {
-  text-align: center;
-  margin-bottom: 24px;
-  font-size: 22px;
-  color: #1a1a1a;
-}
-
-.error {
-  background: #fff2f0;
-  border: 1px solid #ffccc7;
-  color: #ff4d4f;
-  padding: 8px 12px;
-  border-radius: 4px;
+.alert {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   margin-bottom: 16px;
-  font-size: 14px;
 }
 
-label {
-  display: block;
+.form-group {
   margin-bottom: 16px;
-  font-size: 14px;
-  color: #333;
 }
 
-input {
+.form-group label {
   display: block;
-  width: 100%;
-  margin-top: 6px;
-  padding: 8px 12px;
-  border: 1px solid #d9d9d9;
+  font-size: 13px;
+  color: var(--c-text-secondary);
+  margin-bottom: 4px;
+  font-weight: 500;
+}
+
+.input-wrap {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--c-border);
   border-radius: 4px;
-  font-size: 14px;
-  box-sizing: border-box;
+  padding: 0 10px;
+  transition: border-color 200ms, box-shadow 200ms;
 }
 
-input:focus {
-  border-color: #4096ff;
-  outline: none;
-  box-shadow: 0 0 0 2px rgba(64, 150, 255, 0.2);
+.input-wrap:focus-within {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
-button {
-  width: 100%;
-  padding: 10px;
-  background: #1677ff;
-  color: #fff;
+.input-icon {
+  color: var(--c-text-muted);
+  flex-shrink: 0;
+  margin-right: 8px;
+}
+
+.input-wrap input {
+  flex: 1;
   border: none;
-  border-radius: 4px;
-  font-size: 16px;
-  cursor: pointer;
-  margin-top: 8px;
+  outline: none;
+  height: 36px;
+  font-size: 14px;
+  color: var(--c-text);
+  background: transparent;
+  font-family: inherit;
 }
 
-button:hover:not(:disabled) {
-  background: #4096ff;
+.input-wrap input::placeholder {
+  color: var(--c-text-placeholder);
 }
 
-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+.login-btn {
+  width: 100%;
+  height: 36px;
+  margin-top: 4px;
+  gap: 6px;
 }
 </style>

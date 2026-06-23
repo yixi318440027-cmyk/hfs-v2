@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { refreshLucide } from '../utils/lucide'
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
 
 const showAdminMenu = ref(false)
@@ -13,63 +15,143 @@ function toggleAdminMenu() {
 }
 
 function handleLogout() {
+  showAdminMenu.value = false
   authStore.logout()
-  router.push('/login')
+  router.push('/')
 }
+
+function closeAdminMenu() {
+  showAdminMenu.value = false
+}
+
+onMounted(() => {
+  refreshLucide()
+})
 </script>
 
 <template>
-  <nav class="navbar">
-    <div class="navbar-left">
+  <header class="navbar" @click="closeAdminMenu">
+    <div class="navbar-inner">
+      <!-- Logo -->
       <router-link to="/" class="logo">hfs-v2</router-link>
-    </div>
-    <div class="navbar-right" v-if="authStore.isLoggedIn">
-      <span class="username">{{ authStore.user?.username }}</span>
-      <div class="admin-dropdown" v-if="authStore.isAdmin">
-        <button class="dropdown-btn" @click="toggleAdminMenu">
-          管理
-          <span class="arrow" :class="{ open: showAdminMenu }">&#9662;</span>
-        </button>
-        <div class="dropdown-menu" v-if="showAdminMenu" @click="showAdminMenu = false">
-          <router-link to="/admin/dashboard">仪表盘</router-link>
-          <router-link to="/admin/users">用户管理</router-link>
-          <router-link to="/admin/config">系统配置</router-link>
-          <router-link to="/admin/logs">日志查看</router-link>
-        </div>
+
+      <div class="navbar-actions">
+        <!-- Not logged in -->
+        <template v-if="!authStore.isLoggedIn">
+          <router-link to="/login" class="btn btn-ghost">
+            <i data-lucide="log-in" style="width:14px;height:14px"></i>
+            <span>登录</span>
+          </router-link>
+        </template>
+
+        <!-- Logged in -->
+        <template v-else>
+          <router-link
+            to="/"
+            class="nav-link"
+            :class="{ active: route.path === '/' }"
+          >
+            文件管理
+          </router-link>
+
+          <!-- Admin dropdown -->
+          <div class="admin-dropdown" v-if="authStore.isAdmin" @click.stop>
+            <button class="dropdown-btn" @click="toggleAdminMenu">
+              管理
+              <i data-lucide="chevron-down" style="width:12px;height:12px" :class="{ rotated: showAdminMenu }"></i>
+            </button>
+            <div class="dropdown-menu" v-if="showAdminMenu">
+              <router-link to="/admin/dashboard" @click="showAdminMenu = false">
+                <i data-lucide="layout-dashboard" style="width:14px;height:14px"></i>
+                仪表盘
+              </router-link>
+              <router-link to="/admin/users" @click="showAdminMenu = false">
+                <i data-lucide="users" style="width:14px;height:14px"></i>
+                用户管理
+              </router-link>
+              <router-link to="/admin/config" @click="showAdminMenu = false">
+                <i data-lucide="settings" style="width:14px;height:14px"></i>
+                系统配置
+              </router-link>
+              <router-link to="/admin/logs" @click="showAdminMenu = false">
+                <i data-lucide="scroll-text" style="width:14px;height:14px"></i>
+                日志查看
+              </router-link>
+            </div>
+          </div>
+
+          <span class="username">{{ authStore.user?.username }}</span>
+          <button class="btn btn-sm" @click="handleLogout">退出</button>
+        </template>
       </div>
-      <button class="logout-btn" @click="handleLogout">退出</button>
     </div>
-  </nav>
+  </header>
 </template>
 
 <style scoped>
 .navbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 24px;
-  height: 56px;
-  background: #fff;
-  border-bottom: 1px solid #e8e8e8;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  height: 48px;
+  background: var(--c-white);
+  border-bottom: 1px solid var(--c-border);
+  flex-shrink: 0;
+  z-index: 20;
 }
 
-.navbar-left .logo {
-  font-size: 20px;
+.navbar-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 100%;
+  padding: 0 20px;
+  max-width: 100%;
+}
+
+.logo {
+  font-size: 16px;
   font-weight: 700;
-  color: #1677ff;
+  color: var(--c-primary);
+  text-decoration: none;
+  letter-spacing: -0.01em;
+  flex-shrink: 0;
+}
+
+.logo:hover {
+  color: var(--c-primary-hover);
   text-decoration: none;
 }
 
-.navbar-right {
+.navbar-actions {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
+}
+
+.nav-link {
+  font-size: 13px;
+  color: var(--c-text-secondary);
+  text-decoration: none;
+  padding: 2px 0;
+  border-bottom: 2px solid transparent;
+  transition: all 200ms ease-in-out;
+}
+
+.nav-link:hover {
+  color: var(--c-primary);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  color: var(--c-primary);
+  border-bottom-color: var(--c-primary);
 }
 
 .username {
-  font-size: 14px;
-  color: #333;
+  font-size: 13px;
+  color: var(--c-text-muted);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .admin-dropdown {
@@ -77,70 +159,62 @@ function handleLogout() {
 }
 
 .dropdown-btn {
-  background: none;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-  padding: 4px 12px;
-  font-size: 14px;
-  cursor: pointer;
-  color: #333;
   display: flex;
   align-items: center;
   gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 4px;
+  background: var(--c-white);
+  color: var(--c-text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all 200ms ease-in-out;
 }
 
 .dropdown-btn:hover {
-  border-color: #1677ff;
-  color: #1677ff;
+  border-color: var(--c-primary-border);
+  color: var(--c-primary);
+  background: var(--c-primary-light);
 }
 
-.arrow {
-  font-size: 10px;
-  transition: transform 0.2s;
+.dropdown-btn i {
+  transition: transform 200ms ease-in-out;
 }
 
-.arrow.open {
+.dropdown-btn i.rotated {
   transform: rotate(180deg);
 }
 
 .dropdown-menu {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 4px);
   right: 0;
-  margin-top: 4px;
-  background: #fff;
-  border: 1px solid #e8e8e8;
+  background: var(--c-white);
+  border: 1px solid var(--c-border);
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  min-width: 140px;
+  box-shadow: var(--shadow-menu);
+  min-width: 160px;
   z-index: 100;
+  padding: 4px 0;
 }
 
 .dropdown-menu a {
-  display: block;
-  padding: 8px 16px;
-  font-size: 14px;
-  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+  color: var(--c-text);
   text-decoration: none;
+  transition: background 150ms;
 }
 
 .dropdown-menu a:hover {
-  background: #f5f5f5;
-  color: #1677ff;
-}
-
-.logout-btn {
-  background: none;
-  border: 1px solid #d9d9d9;
-  border-radius: 4px;
-  padding: 4px 12px;
-  font-size: 14px;
-  cursor: pointer;
-  color: #666;
-}
-
-.logout-btn:hover {
-  border-color: #ff4d4f;
-  color: #ff4d4f;
+  background: var(--c-bg);
+  text-decoration: none;
 }
 </style>

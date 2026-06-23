@@ -16,11 +16,21 @@ api.interceptors.response.use(
   error => {
     if (error.response?.status === 401) {
       const authStore = useAuthStore()
-      authStore.logout()
-      window.location.href = '/login'
+      // Only redirect to login if the user was previously authenticated.
+      // Public API 401s are expected (e.g. accessing non-public roots without login).
+      if (authStore.isLoggedIn) {
+        authStore.logout()
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }
 )
+
+/** Get the current auth token (for use in non-axios requests like downloads). */
+export function getAuthToken(): string | null {
+  const authStore = useAuthStore()
+  return authStore.token
+}
 
 export default api

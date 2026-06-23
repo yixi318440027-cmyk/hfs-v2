@@ -5,8 +5,8 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'browse',
+    // No requiresAuth — the view itself checks login state
     component: () => import('../views/BrowseView.vue'),
-    meta: { requiresAuth: true },
   },
   {
     path: '/login',
@@ -50,7 +50,7 @@ router.beforeEach((to, _from, next) => {
   const requiresAdmin = to.meta.requiresAdmin as boolean | undefined
 
   if (requiresAuth && !authStore.token) {
-    next({ name: 'login' })
+    next({ name: 'login', query: { redirect: to.fullPath } })
     return
   }
 

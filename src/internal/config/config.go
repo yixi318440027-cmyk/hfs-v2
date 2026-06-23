@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
@@ -32,16 +33,21 @@ type Config struct {
 
 // Default returns a Config with sensible defaults.
 func Default() *Config {
+	// Resolve paths relative to the executable, not the working directory.
+	exePath, _ := os.Executable()
+	exeDir := filepath.Dir(exePath)
+	dataDir := filepath.Join(exeDir, "data")
+
 	return &Config{
 		Port:      ":8080",
-		DataDir:   "./data",
+		DataDir:   dataDir,
 		LogLevel:  "info",
 		JWTSecret: "change-me-in-production",
 		AdminUser: "admin",
 		AdminPass: "admin",
 		VFS: VFSConfig{
 			Roots: []VFSRoot{
-				{Path: "./files", Name: "Files", Public: true, ReadOnly: false},
+				{Path: filepath.Join(dataDir, "Files"), Name: "Files", Public: true, ReadOnly: false},
 			},
 		},
 	}
