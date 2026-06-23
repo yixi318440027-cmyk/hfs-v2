@@ -22,12 +22,19 @@ interface UserItem {
   enabled: boolean
 }
 
+interface TreePath {
+  path: string
+  name: string
+  isRoot: boolean
+}
+
 // Visibility mode shortcut
 type VisibilityMode = 'public' | 'login' | 'restricted'
 
 // State
 const permissions = ref<PermissionRecord[]>([])
 const users = ref<UserItem[]>([])
+const treePaths = ref<TreePath[]>([])
 const loading = ref(false)
 const error = ref('')
 
@@ -43,6 +50,12 @@ const editCanUpload = ref(false)
 const editCanDelete = ref(false)
 const editCanArchive = ref(false)
 const visibilityMode = ref<VisibilityMode>('restricted')
+
+// Path picker state
+const showPathPicker = ref(false)
+const pathPickerFilter = ref('')
+const pathPickerTarget = ref<'edit' | 'batch'>('edit')
+const pathPickerExpanded = ref<Set<string>>(new Set())
 
 // Batch modal
 const showBatch = ref(false)
@@ -80,13 +93,22 @@ async function fetchUsers() {
   }
 }
 
+// Fetch VFS tree paths for path picker
+async function fetchTreePaths() {
+  try {
+    const { data } = await api.get('/files/tree')
+    treePaths.value = (data as any).data || []
+  } catch (_) {
+    treePaths.value = []
+  }
+}
+
 // Apply visibility mode to edit form
 function applyVisibilityMode(mode: VisibilityMode) {
   visibilityMode.value = mode
   editCanSee.value = true
   editCanRead.value = true
   editCanList.value = true
-  // upload/delete/archive remain unchanged by visibility shortcut
 }
 
 function applyBatchVisibilityMode(mode: VisibilityMode) {
@@ -161,6 +183,58 @@ async function deletePermission(id: number) {
   }
 }
 
+// --- Path picker ---
+
+// Computed: group tree paths by parent
+const groupedPaths = computed(() => {
+  const filtered = pathPickerFilter.value
+    ? treePaths.value.filter(p =>
+        p.path.toLowerCase().includes(pathPickerFilter.value.toLowerCase()) ||
+        p.name.toLowerCase().includes(pathPickerFilter.value.toLowerCase())
+      )
+    : treePaths.value
+
+  // Build a map: parent path → children
+  const map = new Map<string, TreePath[]>()
+  for (const p of filtered) {
+    const parent = p.isRoot ? '' : p.path.substring(0, p.path.lastIndexOf('/'))
+    const key = parent || '__roots__'
+    if (!map.has(key)) map.set(key, [])
+    map.get(key)!.push(p)
+  }
+  return map
+})
+
+function openPathPicker(target: 'edit' | 'batch') {
+  pathPickerTarget.value = target
+  pathPickerFilter.value = ''
+  // Auto-expand roots
+  pathPickerExpanded.value = new Set(['__roots__'])
+  showPathPicker.value = true
+}
+
+function togglePickerExpand(key: string) {
+  const expanded = new Set(pathPickerExpanded.value)
+  if (expanded.has(key)) {
+    expanded.delete(key)
+  } else {
+    expanded.add(key)
+  }
+  pathPickerExpanded.value = expanded
+}
+
+function selectPath(path: string) {
+  if (pathPickerTarget.value === 'edit') {
+    editPath.value = path
+  } else {
+    batchPath.value = path
+  }
+  showPathPicker.value = false
+}
+
+// Computed helper (needed for template)
+import { computed } from 'vue'
+
 // Batch grant
 function openBatch() {
   batchPath.value = ''
@@ -207,13 +281,32 @@ function toggleBatchUser(username: string) {
   }
 }
 
+// Recursive tree renderer helper
+function renderTreeNodes(parentKey: string, depth: number): any[] {
+  const children = groupedPaths.value.get(parentKey)
+  if (!children || children.length === 0) return []
+
+  return children.map(child => {
+    const childKey = child.isRoot ? '__roots__' : child.path
+    const hasChildren = groupedPaths.value.has(child.path)
+    const isExpanded = pathPickerExpanded.value.has(child.path)
+
+    return {
+      ...child,
+      depth,
+      hasChildren,
+      isExpanded,
+    }
+  })
+}
+
 onMounted(async () => {
-  await Promise.all([fetchPermissions(), fetchUsers()])
+  await Promise.all([fetchPermissions(), fetchUsers(), fetchTreePaths()])
   await nextTick()
   refreshLucide()
 })
 
-watch([showEdit, showBatch], async () => {
+watch([showEdit, showBatch, showPathPicker], async () => {
   await nextTick()
   refreshLucide()
 })
@@ -323,13 +416,24 @@ watch([showEdit, showBatch], async () => {
 
           <div class="form-row">
             <label class="form-label">VFS 路径</label>
-            <input
-              v-model="editPath"
-              type="text"
-              class="form-input"
-              placeholder="如 /Files、/Files/project-a"
-              :disabled="!!editingId"
-            />
+            <div class="path-input-row">
+              <input
+                v-model="editPath"
+                type="text"
+                class="form-input path-input"
+                placeholder="如 /Files、/Files/project-a"
+                :disabled="!!editingId"
+              />
+              <button
+                v-if="!editingId"
+                class="btn btn-outline btn-path-ref"
+                @click="openPathPicker('edit')"
+                title="引用已有路径"
+              >
+                <i data-lucide="folder-tree" class="btn-icon-left"></i>
+                引用
+              </button>
+            </div>
           </div>
 
           <!-- Visibility shortcut -->
@@ -410,7 +514,13 @@ watch([showEdit, showBatch], async () => {
         <div class="modal-body">
           <div class="form-row">
             <label class="form-label">VFS 路径</label>
-            <input v-model="batchPath" type="text" class="form-input" placeholder="如 /Files/shared" />
+            <div class="path-input-row">
+              <input v-model="batchPath" type="text" class="form-input path-input" placeholder="如 /Files/shared" />
+              <button class="btn btn-outline btn-path-ref" @click="openPathPicker('batch')" title="引用已有路径">
+                <i data-lucide="folder-tree" class="btn-icon-left"></i>
+                引用
+              </button>
+            </div>
           </div>
 
           <div class="form-row">
@@ -473,6 +583,122 @@ watch([showEdit, showBatch], async () => {
         <div class="modal-footer">
           <button class="btn btn-outline" @click="showBatch = false">取消</button>
           <button class="btn btn-primary" @click="saveBatch">批量授权</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Path Picker Modal -->
+    <div v-if="showPathPicker" class="modal-overlay" @click.self="showPathPicker = false">
+      <div class="modal-content path-picker-modal">
+        <div class="modal-header">
+          <h2>引用文件路径</h2>
+          <button class="modal-close" @click="showPathPicker = false">
+            <i data-lucide="x"></i>
+          </button>
+        </div>
+
+        <div class="modal-body">
+          <div class="picker-search">
+            <i data-lucide="search" class="picker-search-icon"></i>
+            <input
+              v-model="pathPickerFilter"
+              type="text"
+              class="form-input"
+              placeholder="搜索路径或目录名..."
+            />
+          </div>
+
+          <div class="picker-tree">
+            <!-- Root level -->
+            <template v-for="root in treePaths.filter(p => p.isRoot)" :key="root.path">
+              <div class="picker-node-group">
+                <div
+                  class="picker-node picker-node-root"
+                  :class="{ 'picker-node-selected': (pathPickerTarget === 'edit' ? editPath : batchPath) === root.path }"
+                >
+                  <button
+                    class="picker-toggle"
+                    :class="{ 'picker-toggle-expanded': pathPickerExpanded.has(root.path) }"
+                    @click="togglePickerExpand(root.path)"
+                  >
+                    <i data-lucide="chevron-right" style="width:12px;height:12px"></i>
+                  </button>
+                  <i data-lucide="folder" class="picker-folder-icon"></i>
+                  <span class="picker-name" @click="selectPath(root.path)">{{ root.name }}</span>
+                  <code class="picker-path-hint">{{ root.path }}</code>
+                </div>
+
+                <!-- Level 1 children -->
+                <div v-if="pathPickerExpanded.has(root.path)" class="picker-children">
+                  <template v-for="child in treePaths.filter(p => !p.isRoot && p.path.startsWith(root.path + '/') && p.path.split('/').length === root.path.split('/').length + 1)" :key="child.path">
+                    <div class="picker-node-group">
+                      <div
+                        class="picker-node"
+                        :class="{ 'picker-node-selected': (pathPickerTarget === 'edit' ? editPath : batchPath) === child.path }"
+                      >
+                        <button
+                          class="picker-toggle"
+                          :class="{ 'picker-toggle-expanded': pathPickerExpanded.has(child.path) }"
+                          @click="togglePickerExpand(child.path)"
+                        >
+                          <i data-lucide="chevron-right" style="width:12px;height:12px"></i>
+                        </button>
+                        <i data-lucide="folder" class="picker-folder-icon"></i>
+                        <span class="picker-name" @click="selectPath(child.path)">{{ child.name }}</span>
+                        <code class="picker-path-hint">{{ child.path }}</code>
+                      </div>
+
+                      <!-- Level 2 children -->
+                      <div v-if="pathPickerExpanded.has(child.path)" class="picker-children">
+                        <template v-for="grandchild in treePaths.filter(p => !p.isRoot && p.path.startsWith(child.path + '/') && p.path.split('/').length === child.path.split('/').length + 1)" :key="grandchild.path">
+                          <div class="picker-node-group">
+                            <div
+                              class="picker-node"
+                              :class="{ 'picker-node-selected': (pathPickerTarget === 'edit' ? editPath : batchPath) === grandchild.path }"
+                            >
+                              <button
+                                class="picker-toggle"
+                                :class="{ 'picker-toggle-expanded': pathPickerExpanded.has(grandchild.path) }"
+                                @click="togglePickerExpand(grandchild.path)"
+                              >
+                                <i data-lucide="chevron-right" style="width:12px;height:12px"></i>
+                              </button>
+                              <i data-lucide="folder" class="picker-folder-icon"></i>
+                              <span class="picker-name" @click="selectPath(grandchild.path)">{{ grandchild.name }}</span>
+                              <code class="picker-path-hint">{{ grandchild.path }}</code>
+                            </div>
+
+                            <!-- Level 3+ recursive -->
+                            <div v-if="pathPickerExpanded.has(grandchild.path)" class="picker-children">
+                              <template v-for="descendant in treePaths.filter(p => !p.isRoot && p.path.startsWith(grandchild.path + '/') && p.path.split('/').length === grandchild.path.split('/').length + 1)" :key="descendant.path">
+                                <div
+                                  class="picker-node"
+                                  :class="{ 'picker-node-selected': (pathPickerTarget === 'edit' ? editPath : batchPath) === descendant.path }"
+                                >
+                                  <span class="picker-indent"></span>
+                                  <i data-lucide="folder" class="picker-folder-icon"></i>
+                                  <span class="picker-name" @click="selectPath(descendant.path)">{{ descendant.name }}</span>
+                                  <code class="picker-path-hint">{{ descendant.path }}</code>
+                                </div>
+                              </template>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+
+            <div v-if="treePaths.length === 0" class="picker-empty">
+              暂无 VFS 目录，请先创建根目录和子文件夹
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button class="btn btn-outline" @click="showPathPicker = false">取消</button>
         </div>
       </div>
     </div>
@@ -685,6 +911,10 @@ watch([showEdit, showBatch], async () => {
   box-shadow: 0 4px 16px rgba(0,0,0,0.12);
 }
 
+.path-picker-modal {
+  width: 520px;
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -757,6 +987,21 @@ watch([showEdit, showBatch], async () => {
 .form-hint {
   font-size: 11px;
   color: #9CA3AF;
+}
+
+/* Path input row with ref button */
+.path-input-row {
+  display: flex;
+  gap: 6px;
+}
+
+.path-input {
+  flex: 1;
+}
+
+.btn-path-ref {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 /* Visibility tabs */
@@ -841,5 +1086,123 @@ watch([showEdit, showBatch], async () => {
 
 .user-check-item input[type="checkbox"] {
   accent-color: #3B82F6;
+}
+
+/* Path picker */
+.picker-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.picker-search-icon {
+  position: absolute;
+  left: 8px;
+  width: 14px;
+  height: 14px;
+  color: #9CA3AF;
+  pointer-events: none;
+}
+
+.picker-search .form-input {
+  padding-left: 28px;
+  width: 100%;
+}
+
+.picker-tree {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid #E5E7EB;
+  border-radius: 4px;
+  background: #F9FAFB;
+}
+
+.picker-empty {
+  padding: 24px;
+  text-align: center;
+  color: #9CA3AF;
+  font-size: 13px;
+}
+
+.picker-node-group {
+  margin-bottom: 0;
+}
+
+.picker-node {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #374151;
+  transition: background 100ms;
+  border-left: 4px solid transparent;
+}
+
+.picker-node:hover {
+  background: #F3F4F6;
+}
+
+.picker-node-selected {
+  background: #EFF6FF !important;
+  border-left-color: #3B82F6;
+}
+
+.picker-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: #9CA3AF;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.picker-toggle i {
+  transition: transform 150ms;
+}
+
+.picker-toggle-expanded i {
+  transform: rotate(90deg);
+}
+
+.picker-folder-icon {
+  width: 14px;
+  height: 14px;
+  color: #F59E0B;
+  flex-shrink: 0;
+}
+
+.picker-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+
+.picker-path-hint {
+  margin-left: auto;
+  font-size: 11px;
+  color: #9CA3AF;
+  flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.picker-children {
+  /* indented by parent */
+}
+
+.picker-indent {
+  width: 16px;
+  flex-shrink: 0;
 }
 </style>

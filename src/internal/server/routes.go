@@ -87,6 +87,7 @@ func (s *Server) setupRoutes() http.Handler {
 	r.Route("/api/files", func(r chi.Router) {
 		r.Use(s.authMiddleware)
 		r.Get("/", s.handleListDir)
+		r.Get("/tree", s.handleVfsTree)
 		r.Get("/download", s.handleDownload)
 		r.Get("/download-zip", s.handleDownloadZip)
 		r.Delete("/", s.handleDelete)
@@ -1051,4 +1052,11 @@ func (s *Server) handleAdminSetPermissionBatch(w http.ResponseWriter, r *http.Re
 		"vfsPath":   req.VFSPath,
 		"perms":     ps,
 	})
+}
+
+// handleVfsTree handles GET /api/files/tree — returns all VFS directory paths
+// for the permissions page path picker.
+func (s *Server) handleVfsTree(w http.ResponseWriter, r *http.Request) {
+	paths := s.vfs.CollectTreePaths()
+	jsonOK(w, paths)
 }

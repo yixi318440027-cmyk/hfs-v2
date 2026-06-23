@@ -218,6 +218,45 @@ func (v *VFS) ListDir(vfsPath string) (*DirEntry, error) {
 	}, nil
 }
 
+// TreePath represents a single directory path entry for the path picker.
+type TreePath struct {
+	Path   string `json:"path"`
+	Name   string `json:"name"`
+	IsRoot bool   `json:"isRoot"`
+}
+
+// CollectTreePaths recursively walks all VFS roots and returns every directory
+// path that exists on disk. This is used by the permissions page to let admins
+// pick a path from the real file tree instead of typing it manually.
+func (v *VFS) CollectTreePaths() []TreePath {
+	var result []TreePath
+
+	for _, root := range v.roots {
+		rootVfsPath := "/" + root.Name
+		result = append(result, TreePath{Path: rootVfsPath, Name: root.Name, IsRoot: true})
+
+		// Walk the root directory recursively.
+		_ = filepath.Walk(root.Path, func(localPath string, info os.FileInfo, err error) error {
+			if err != nil || !info.IsDir() || localPath == root.Path {
+				return nil
+			}
+
+			// Compute the VFS path from the local path.
+			rel, err := filepath.Rel(root.Path, localPath)
+			if err != nil {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			vfsPath := rootVfsPath + "/" + rel
+			result = append(result, TreePath{Path: vfsPath, Name: info.Name(), IsRoot: false})
+
+			return nil
+		})
+	}
+
+	return result
+}
+
 // ListDirPublic lists a directory under a Public VFS root.
 // Returns an error if the root is not public.
 func (v *VFS) ListDirPublic(vfsPath string) (*DirEntry, error) {
