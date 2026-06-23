@@ -1,5 +1,29 @@
 # Changelog
 
+## v0.6.0 (2026-06-23)
+
+### 文件权限系统
+
+- **6 种权限粒度**：can_see / can_read / can_list / can_upload / can_delete / can_archive
+- **per-path × per-user 授权**：每个用户对每个 VFS 路径独立配置权限
+- **子路径继承**：子目录自动继承父路径的权限配置
+- **Admin 豁免**：admin 角色始终拥有全部权限
+- **默认只读**：新用户默认 can_see/can_read/can_list=true，upload/delete/archive=false
+- **管理后台**：新增权限管理页面，支持单条配置、批量授权、可见性级别快捷入口
+- **管理 API**：`/api/admin/permissions` — CRUD + batch
+- **403 提示**：权限拒绝时返回具体缺失的权限类型
+
+### 变更文件
+
+- `src/internal/permission/permission.go` — 权限检查引擎（新增）
+- `src/internal/db/db.go` — permissions 表迁移
+- `src/internal/server/server.go` — 注入 permission.Engine
+- `src/internal/server/routes.go` — 8 个 VFS handler 注入权限检查 + 4 个权限 API handler
+- `web/src/views/admin/PermissionsView.vue` — 权限管理页面（新增）
+- `web/src/components/AdminSidebar.vue` — 新增"权限管理"菜单
+- `web/src/router/index.ts` — 新增权限管理路由
+- `docs/PRD-v0.6.0-file-permissions.md` — PRD 文档
+
 ## v0.5.1 (2026-06-23)
 
 ### Grid View 视觉重构
