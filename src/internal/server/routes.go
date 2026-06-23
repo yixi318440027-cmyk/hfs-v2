@@ -5,10 +5,22 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"path"
 	"path/filepath"
 
 	"github.com/go-chi/chi/v5"
 )
+
+func init() {
+	// Register WebDAV HTTP methods that chi doesn't support by default.
+	chi.RegisterMethod("PROPFIND")
+	chi.RegisterMethod("PROPPATCH")
+	chi.RegisterMethod("MKCOL")
+	chi.RegisterMethod("COPY")
+	chi.RegisterMethod("MOVE")
+	chi.RegisterMethod("LOCK")
+	chi.RegisterMethod("UNLOCK")
+}
 
 // jsonOK writes a successful JSON response.
 func jsonOK(w http.ResponseWriter, data interface{}) {
@@ -57,6 +69,14 @@ func (s *Server) setupRoutes() http.Handler {
 		r.Delete("/", s.handleDelete)
 		r.Put("/rename", s.handleRename)
 		r.Post("/mkdir", s.handleMkdir)
+		r.Post("/upload", s.handleUpload)
+	})
+
+	// WebDAV routes (protected by auth middleware).
+	// Non-standard HTTP methods (PROPFIND etc.) are registered via chi.RegisterMethod in init().
+	r.Route("/dav", func(r chi.Router) {
+		r.Use(s.authMiddleware)
+		r.HandleFunc("/*", s.handleWebDAV)
 	})
 
 	return r
@@ -223,7 +243,75 @@ func (s *Server) handleMkdir(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonOK(w, map[string]string{"created": filepath.Join(req.Path, req.DirName)})
+	// Use path.Join for forward-slash paths in API responses (cross-platform consistency)
+	jsonOK(w, map[string]string{"created": path.Join(req.Path, req.DirName)})
+}
+
+// UploadedFile represents a successfully uploaded file in the response.
+type UploadedFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Path string `json:"path"`
+}
+
+// UploadError represents a failed upload in the response.
+type UploadError struct {
+	Name  string `json:"name"`
+	Error string `json:"error"`
+}
+
+// handleUpload handles POST /api/files/upload (multipart/form-data).
+func (s *Server) handleUpload(w http.ResponseWriter, r *http.Request) {
+	// Limit request body to 32MB.
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
+		jsonError(w, http.StatusBadRequest, "file too large or invalid form")
+		return
+	}
+
+	dirPath := r.FormValue("path")
+	if dirPath == "" {
+		dirPath = "/Files"
+	}
+
+	var uploaded []UploadedFile
+	var uploadErrors []UploadError
+
+	// Handle multiple files under the "files" field.
+	fhs := r.MultipartForm.File["files"]
+	for _, fh := range fhs {
+		// Sanitize filename to prevent path traversal.
+		safeName := filepath.Base(fh.Filename)
+
+		file, err := fh.Open()
+		if err != nil {
+			uploadErrors = append(uploadErrors, UploadError{Name: fh.Filename, Error: err.Error()})
+			continue
+		}
+		defer file.Close()
+
+		vfsPath := path.Join(dirPath, safeName)
+		if err := s.vfs.UploadFile(vfsPath, file); err != nil {
+			uploadErrors = append(uploadErrors, UploadError{Name: fh.Filename, Error: err.Error()})
+			continue
+		}
+
+		uploaded = append(uploaded, UploadedFile{
+			Name: safeName,
+			Size: fh.Size,
+			Path: vfsPath,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"ok": true,
+		"data": map[string]interface{}{
+			"uploaded": uploaded,
+			"errors":   uploadErrors,
+		},
+	})
 }
 
 // detectMIME returns the MIME type for a file based on its extension.

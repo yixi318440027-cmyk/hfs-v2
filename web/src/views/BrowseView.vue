@@ -15,6 +15,12 @@ const files = ref<FileItem[]>([])
 const loading = ref(false)
 const sortKey = ref<'name' | 'size' | 'modTime'>('name')
 const sortDir = ref<'asc' | 'desc'>('asc')
+const searchQuery = ref('')
+const isDragging = ref(false)
+const fileInput = ref<HTMLInputElement>()
+const uploading = ref(false)
+const uploadProgress = ref(0)
+const uploadTotal = ref(0)
 
 function parsePath(vfsPath: string): string[] {
   const parts = vfsPath.split('/').filter(Boolean)
@@ -55,6 +61,21 @@ const sortedFiles = computed(() => {
   })
   return list
 })
+
+const filteredFiles = computed(() => {
+  if (!searchQuery.value.trim()) return sortedFiles.value
+  const q = searchQuery.value.toLowerCase()
+  return sortedFiles.value.filter(f => f.name.toLowerCase().includes(q))
+})
+
+const searchResultCount = computed(() => {
+  if (!searchQuery.value.trim()) return 0
+  return filteredFiles.value.length
+})
+
+function onSearch() {
+  // 前端过滤，无需额外操作
+}
 
 async function loadFiles() {
   loading.value = true
@@ -131,6 +152,61 @@ async function handleMkdir() {
   }
 }
 
+function triggerUpload() {
+  fileInput.value?.click()
+}
+
+function handleFileSelect(e: Event) {
+  const input = e.target as HTMLInputElement
+  if (input.files) {
+    uploadFiles(Array.from(input.files))
+    input.value = ''
+  }
+}
+
+function handleDrop(e: DragEvent) {
+  isDragging.value = false
+  if (e.dataTransfer?.files) {
+    uploadFiles(Array.from(e.dataTransfer.files))
+  }
+}
+
+async function uploadFiles(fileList: File[]) {
+  if (fileList.length === 0) return
+  uploading.value = true
+  uploadProgress.value = 0
+  uploadTotal.value = fileList.length
+
+  const formData = new FormData()
+  formData.append('path', path.value)
+  fileList.forEach(f => formData.append('files', f))
+
+  try {
+    const res = await api.post('/files/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e: any) => {
+        if (e.total) {
+          uploadProgress.value = Math.round((e.loaded / e.total) * 100)
+        }
+      },
+    })
+    if (res.data.ok) {
+      const uploaded = res.data.data.uploaded?.length || 0
+      const errors = res.data.data.errors?.length || 0
+      if (errors > 0) {
+        alert(`上传完成：${uploaded} 个成功，${errors} 个失败`)
+      }
+      loadFiles()
+    }
+  } catch {
+    alert('上传失败')
+  } finally {
+    uploading.value = false
+    uploadProgress.value = 0
+    uploadTotal.value = 0
+  }
+}
+
 function toggleSort(key: 'name' | 'size' | 'modTime') {
   if (sortKey.value === key) {
     sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
@@ -167,6 +243,41 @@ onMounted(() => {
     <div class="toolbar">
       <button class="btn btn-primary" @click="handleMkdir">新建文件夹</button>
       <button class="btn" @click="loadFiles">刷新</button>
+      <div class="search-box">
+        <span class="search-icon">🔍</span>
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="搜索文件..."
+          class="search-input"
+          @input="onSearch"
+        />
+        <span v-if="searchQuery" class="search-clear" @click="searchQuery = ''">✕</span>
+      </div>
+    </div>
+
+    <div
+      class="drop-zone"
+      :class="{ 'drop-active': isDragging }"
+      @dragover.prevent="isDragging = true"
+      @dragleave.prevent="isDragging = false"
+      @drop.prevent="handleDrop"
+    >
+      <p>拖拽文件到此处上传，或 <button class="btn-link" @click="triggerUpload">选择文件</button></p>
+    </div>
+    <input
+      ref="fileInput"
+      type="file"
+      multiple
+      style="display: none"
+      @change="handleFileSelect"
+    />
+
+    <div v-if="uploading" class="upload-progress">
+      <div class="progress-bar">
+        <div class="progress-fill" :style="{ width: uploadProgress + '%' }"></div>
+      </div>
+      <span class="progress-text">{{ uploadProgress }}%</span>
     </div>
 
     <div class="breadcrumb">
@@ -185,6 +296,9 @@ onMounted(() => {
     </div>
 
     <div class="file-table-wrapper">
+      <div v-if="searchQuery.trim()" class="search-result-info">
+        找到 {{ searchResultCount }} 个结果
+      </div>
       <table class="file-table" v-if="!loading">
         <thead>
           <tr>
@@ -201,10 +315,10 @@ onMounted(() => {
           </tr>
         </thead>
         <tbody>
-          <tr v-if="sortedFiles.length === 0">
+          <tr v-if="filteredFiles.length === 0">
             <td colspan="4" class="empty">目录为空</td>
           </tr>
-          <tr v-for="file in sortedFiles" :key="file.name" class="file-row">
+          <tr v-for="file in filteredFiles" :key="file.name" class="file-row">
             <td class="col-name">
               <span
                 class="file-icon"
@@ -423,5 +537,132 @@ onMounted(() => {
 .btn-danger:hover {
   border-color: #ff4d4f;
   color: #ff4d4f;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 0 8px;
+  transition: border-color 0.2s;
+}
+
+.search-box:focus-within {
+  border-color: #1677ff;
+  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.1);
+}
+
+.search-icon {
+  font-size: 14px;
+  color: #999;
+  flex-shrink: 0;
+}
+
+.search-input {
+  border: none;
+  outline: none;
+  padding: 6px 0;
+  font-size: 14px;
+  color: #333;
+  width: 180px;
+  background: transparent;
+}
+
+.search-input::placeholder {
+  color: #bfbfbf;
+}
+
+.search-clear {
+  cursor: pointer;
+  color: #999;
+  font-size: 14px;
+  padding: 2px 4px;
+  flex-shrink: 0;
+}
+
+.search-clear:hover {
+  color: #333;
+}
+
+.search-result-info {
+  padding: 8px 16px;
+  font-size: 13px;
+  color: #666;
+  border-bottom: 1px solid #e8e8e8;
+}
+
+.drop-zone {
+  border: 2px dashed #d9d9d9;
+  border-radius: 8px;
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 16px;
+  color: #999;
+  font-size: 14px;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.drop-zone:hover {
+  border-color: #1677ff;
+  color: #1677ff;
+}
+
+.drop-active {
+  border-color: #1677ff;
+  background: rgba(22, 119, 255, 0.04);
+  color: #1677ff;
+}
+
+.drop-zone p {
+  margin: 0;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: #1677ff;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background: #f0f0f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: #1677ff;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 13px;
+  color: #666;
+  min-width: 36px;
+  text-align: right;
+}
+
+.highlight {
+  background: #fff3cd;
+  font-weight: 600;
 }
 </style>

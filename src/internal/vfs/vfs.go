@@ -3,6 +3,7 @@ package vfs
 import (
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"os"
 	"path/filepath"
@@ -211,6 +212,40 @@ func (v *VFS) CreateDir(vfsPath, dirName string) error {
 
 	newPath := filepath.Join(parentPath, dirName)
 	return os.Mkdir(newPath, 0755)
+}
+
+// UploadFile writes the contents of r to the given VFS path.
+// vfsPath is the full VFS path including filename, e.g. "/Files/subdir/new.txt".
+// Parent directories are created automatically if they do not exist.
+func (v *VFS) UploadFile(vfsPath string, reader io.Reader) error {
+	localPath, root, err := v.GetFilePath(vfsPath)
+	if err != nil {
+		return err
+	}
+
+	if root.ReadOnly {
+		return errors.New("root is read-only")
+	}
+
+	// Ensure parent directory exists.
+	parentDir := filepath.Dir(localPath)
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return err
+	}
+
+	// Create the file.
+	file, err := os.Create(localPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	// Copy contents.
+	if _, err := io.Copy(file, reader); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // splitPath splits a VFS path into segments, removing empty parts.
