@@ -203,7 +203,7 @@ JWT（24h），token 存 localStorage（v0.6.1 起）。401 拦截器只在「�
 | 1 | **`config.yaml` 启动时不加载**：`main.go` 只调 `config.Default()`，`LoadConfig()` 从未被调用 | 在管理页改的 port / data_dir / vfs roots **重启后丢失**，等于配置管理功能半残 | 在 `main.go` 里加：若 `<DataDir>/config.yaml` 存在则 `LoadConfig`，并回落到 Default |
 | 2 | **零测试**：整个仓库没有任何 `*_test.go` | 权限这类关键逻辑无回归保护 | 优先给 `permission` 包补表驱动测试（Check 的 4 级优先级 + 路径继承） |
 | 3 | 两个 `data/` 目录并存 | 排查数据问题时容易搞错对象 | 删掉不用的那个，或统一改为固定路径 |
-| 4 | 本地无 git tag（Release 只在 GitHub 上打） | 本地回滚不便 | `git push --tags` 同步，或改用 tag 驱动发布 |
+| 4 | ~~本地无 git tag~~ **已修复（2026-10-26）** | 本地已与远程同步 `v0.5.1` / `v0.6.0` / `v0.6.1` | 新打 tag 记得 `git push origin <tag>` |
 | 5 | VFS 只支持**单 root**（默认 `data/Files`） | 原生 HFS 支持多 Real/Virtual Folder | 配置结构 `VFS.Roots` 已是数组，UI/管理接口还没暴露增删 |
 | 6 | 权限判定中 root 层依赖 `VFSRoot.Public` 兜底（`routes.go` 公开 roots 处） | 与权限表存在两套来源，语义重叠 | 收敛为只认权限表 |
 | 7 | 根目录 `hfs.exe`、`bin/`、`web/dist` 等产物混杂 | 仓库/目录略乱 | 已在 `.gitignore` 忽略，注意别误提交 |
