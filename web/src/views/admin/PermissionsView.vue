@@ -31,6 +31,10 @@ interface TreePath {
 // Visibility mode shortcut
 type VisibilityMode = 'public' | 'login' | 'restricted'
 
+// Special usernames for visibility modes
+const USER_PUBLIC = '*'
+const USER_LOGIN = '@'
+
 // State
 const permissions = ref<PermissionRecord[]>([])
 const users = ref<UserItem[]>([])
@@ -103,12 +107,34 @@ async function fetchTreePaths() {
   }
 }
 
-// Apply visibility mode to edit form
+// Derive visibility mode from username
+function getVisibilityFromUsername(u: string): VisibilityMode {
+  if (u === USER_PUBLIC) return 'public'
+  if (u === USER_LOGIN) return 'login'
+  return 'restricted'
+}
+
+// Display username in table (friendly names for special users)
+function displayUsername(u: string): string {
+  if (u === USER_PUBLIC) return '公开（所有人）'
+  if (u === USER_LOGIN) return '仅登录用户'
+  return u
+}
+
+// Apply visibility mode to edit form (create mode only — not for editing existing records)
 function applyVisibilityMode(mode: VisibilityMode) {
   visibilityMode.value = mode
   editCanSee.value = true
   editCanRead.value = true
   editCanList.value = true
+  // Set username based on mode (only in create mode)
+  if (mode === 'public') {
+    editUsername.value = USER_PUBLIC
+  } else if (mode === 'login') {
+    editUsername.value = USER_LOGIN
+  } else {
+    editUsername.value = ''
+  }
 }
 
 function applyBatchVisibilityMode(mode: VisibilityMode) {
@@ -116,9 +142,16 @@ function applyBatchVisibilityMode(mode: VisibilityMode) {
   batchCanSee.value = true
   batchCanRead.value = true
   batchCanList.value = true
+  if (mode === 'public') {
+    batchUsernames.value = [USER_PUBLIC]
+  } else if (mode === 'login') {
+    batchUsernames.value = [USER_LOGIN]
+  } else {
+    batchUsernames.value = []
+  }
 }
 
-// Open edit modal for existing record
+// Open edit modal for existing record — username and path are locked
 function openEdit(record: PermissionRecord) {
   editingId.value = record.id
   editUsername.value = record.username
@@ -129,7 +162,7 @@ function openEdit(record: PermissionRecord) {
   editCanUpload.value = record.canUpload
   editCanDelete.value = record.canDelete
   editCanArchive.value = record.canArchive
-  visibilityMode.value = 'restricted'
+  visibilityMode.value = getVisibilityFromUsername(record.username)
   showEdit.value = true
 }
 
@@ -150,13 +183,27 @@ function openCreate() {
 
 // Save permission (create or update)
 async function savePermission() {
-  if (!editUsername.value || !editPath.value) {
-    error.value = '用户名和路径不能为空'
+  if (!editPath.value) {
+    error.value = '路径不能为空'
     return
   }
+  // For create mode (restricted), a specific username is required
+  if (!editingId.value && visibilityMode.value === 'restricted' && !editUsername.value) {
+    error.value = '指定用户模式下必须选择用户'
+    return
+  }
+
+  // Build the effective username
+  const effectiveUsername = editingId.value
+    ? editUsername.value  // edit mode: use the locked-in original username
+    : visibilityMode.value === 'restricted'
+      ? editUsername.value
+      : visibilityMode.value === 'public' ? USER_PUBLIC : USER_LOGIN
+
   try {
-    await api.post('/admin/permissions', {
-      username: editUsername.value,
+    const method = editingId.value ? api.put : api.post
+    await method('/admin/permissions', {
+      username: effectiveUsername,
       vfsPath: editPath.value,
       canSee: editCanSee.value,
       canRead: editCanRead.value,
@@ -185,30 +232,9 @@ async function deletePermission(id: number) {
 
 // --- Path picker ---
 
-// Computed: group tree paths by parent
-const groupedPaths = computed(() => {
-  const filtered = pathPickerFilter.value
-    ? treePaths.value.filter(p =>
-        p.path.toLowerCase().includes(pathPickerFilter.value.toLowerCase()) ||
-        p.name.toLowerCase().includes(pathPickerFilter.value.toLowerCase())
-      )
-    : treePaths.value
-
-  // Build a map: parent path → children
-  const map = new Map<string, TreePath[]>()
-  for (const p of filtered) {
-    const parent = p.isRoot ? '' : p.path.substring(0, p.path.lastIndexOf('/'))
-    const key = parent || '__roots__'
-    if (!map.has(key)) map.set(key, [])
-    map.get(key)!.push(p)
-  }
-  return map
-})
-
 function openPathPicker(target: 'edit' | 'batch') {
   pathPickerTarget.value = target
   pathPickerFilter.value = ''
-  // Auto-expand roots
   pathPickerExpanded.value = new Set(['__roots__'])
   showPathPicker.value = true
 }
@@ -232,9 +258,6 @@ function selectPath(path: string) {
   showPathPicker.value = false
 }
 
-// Computed helper (needed for template)
-import { computed } from 'vue'
-
 // Batch grant
 function openBatch() {
   batchPath.value = ''
@@ -250,13 +273,24 @@ function openBatch() {
 }
 
 async function saveBatch() {
-  if (batchUsernames.value.length === 0 || !batchPath.value) {
-    error.value = '请选择用户并填写路径'
+  if (!batchPath.value) {
+    error.value = '请填写路径'
     return
   }
+  // For restricted mode, specific users are required
+  if (batchVisibilityMode.value === 'restricted' && batchUsernames.value.length === 0) {
+    error.value = '指定用户模式下必须选择用户'
+    return
+  }
+
+  // Build effective usernames
+  const effectiveUsernames = batchVisibilityMode.value === 'restricted'
+    ? batchUsernames.value
+    : batchVisibilityMode.value === 'public' ? [USER_PUBLIC] : [USER_LOGIN]
+
   try {
     await api.post('/admin/permissions/batch', {
-      usernames: batchUsernames.value,
+      usernames: effectiveUsernames,
       vfsPath: batchPath.value,
       canSee: batchCanSee.value,
       canRead: batchCanRead.value,
@@ -279,25 +313,6 @@ function toggleBatchUser(username: string) {
   } else {
     batchUsernames.value.push(username)
   }
-}
-
-// Recursive tree renderer helper
-function renderTreeNodes(parentKey: string, depth: number): any[] {
-  const children = groupedPaths.value.get(parentKey)
-  if (!children || children.length === 0) return []
-
-  return children.map(child => {
-    const childKey = child.isRoot ? '__roots__' : child.path
-    const hasChildren = groupedPaths.value.has(child.path)
-    const isExpanded = pathPickerExpanded.value.has(child.path)
-
-    return {
-      ...child,
-      depth,
-      hasChildren,
-      isExpanded,
-    }
-  })
 }
 
 onMounted(async () => {
@@ -357,7 +372,13 @@ watch([showEdit, showBatch, showPathPicker], async () => {
           </tr>
           <tr v-for="perm in permissions" :key="perm.id">
             <td class="col-user">
-              <span class="user-badge">{{ perm.username }}</span>
+              <span
+                class="user-badge"
+                :class="{
+                  'user-badge-public': perm.username === '*',
+                  'user-badge-login': perm.username === '@',
+                }"
+              >{{ displayUsername(perm.username) }}</span>
             </td>
             <td class="col-path">
               <code>{{ perm.vfsPath }}</code>
@@ -404,42 +425,21 @@ watch([showEdit, showBatch, showPathPicker], async () => {
         </div>
 
         <div class="modal-body">
-          <div class="form-row">
-            <label class="form-label">用户</label>
-            <select v-model="editUsername" class="form-select" :disabled="!!editingId">
-              <option value="">选择用户</option>
-              <option v-for="u in users" :key="u.username" :value="u.username">
-                {{ u.username }} {{ u.role === 'admin' ? '(管理员)' : '' }}
-              </option>
-            </select>
-          </div>
-
-          <div class="form-row">
-            <label class="form-label">VFS 路径</label>
-            <div class="path-input-row">
-              <input
-                v-model="editPath"
-                type="text"
-                class="form-input path-input"
-                placeholder="如 /Files、/Files/project-a"
-                :disabled="!!editingId"
-              />
-              <button
-                v-if="!editingId"
-                class="btn btn-outline btn-path-ref"
-                @click="openPathPicker('edit')"
-                title="引用已有路径"
-              >
-                <i data-lucide="folder-tree" class="btn-icon-left"></i>
-                引用
-              </button>
-            </div>
-          </div>
-
-          <!-- Visibility shortcut -->
+          <!-- Visibility shortcut (create mode only; edit mode shows it as read-only info) -->
           <div class="form-row">
             <label class="form-label">可见性级别</label>
-            <div class="visibility-tabs">
+            <div v-if="editingId" class="visibility-readonly">
+              <span class="user-badge"
+                :class="{
+                  'user-badge-public': visibilityMode === 'public',
+                  'user-badge-login': visibilityMode === 'login',
+                }"
+              >
+                {{ visibilityMode === 'public' ? '公开可见' : visibilityMode === 'login' ? '仅登录可见' : '指定用户' }}
+              </span>
+              <span class="form-hint" style="margin-left: 8px">编辑模式下不可修改可见性级别。如需更改，请删除后重新创建。</span>
+            </div>
+            <div v-else class="visibility-tabs">
               <button
                 class="vis-tab"
                 :class="{ active: visibilityMode === 'public' }"
@@ -462,7 +462,43 @@ watch([showEdit, showBatch, showPathPicker], async () => {
                 <i data-lucide="user-check"></i> 指定用户
               </button>
             </div>
-            <span class="form-hint">切换可见性级别会自动设置"查看/读取/列表"权限</span>
+            <span v-if="!editingId" class="form-hint">
+              公开 = 所有人可访问 · 仅登录 = 登录后即可访问 · 指定用户 = 只有选定用户可访问
+            </span>
+          </div>
+
+          <!-- VFS path -->
+          <div class="form-row">
+            <label class="form-label">VFS 路径</label>
+            <div class="path-input-row">
+              <input
+                v-model="editPath"
+                type="text"
+                class="form-input path-input"
+                placeholder="如 /Files、/Files/project-a"
+                :disabled="!!editingId"
+              />
+              <button
+                v-if="!editingId"
+                class="btn btn-outline btn-path-ref"
+                @click="openPathPicker('edit')"
+                title="引用已有路径"
+              >
+                <i data-lucide="folder-tree" class="btn-icon-left"></i>
+                引用
+              </button>
+            </div>
+          </div>
+
+          <!-- User selector (create mode + restricted only) -->
+          <div v-if="!editingId && visibilityMode === 'restricted'" class="form-row">
+            <label class="form-label">授权给</label>
+            <select v-model="editUsername" class="form-select">
+              <option value="">选择用户</option>
+              <option v-for="u in users" :key="u.username" :value="u.username">
+                {{ u.username }} {{ u.role === 'admin' ? '(管理员)' : '' }}
+              </option>
+            </select>
           </div>
 
           <!-- Permission checkboxes -->
@@ -512,31 +548,7 @@ watch([showEdit, showBatch, showPathPicker], async () => {
         </div>
 
         <div class="modal-body">
-          <div class="form-row">
-            <label class="form-label">VFS 路径</label>
-            <div class="path-input-row">
-              <input v-model="batchPath" type="text" class="form-input path-input" placeholder="如 /Files/shared" />
-              <button class="btn btn-outline btn-path-ref" @click="openPathPicker('batch')" title="引用已有路径">
-                <i data-lucide="folder-tree" class="btn-icon-left"></i>
-                引用
-              </button>
-            </div>
-          </div>
-
-          <div class="form-row">
-            <label class="form-label">选择用户</label>
-            <div class="user-check-list">
-              <label v-for="u in users" :key="u.username" class="user-check-item">
-                <input
-                  type="checkbox"
-                  :checked="batchUsernames.includes(u.username)"
-                  @change="toggleBatchUser(u.username)"
-                />
-                <span>{{ u.username }}</span>
-              </label>
-            </div>
-          </div>
-
+          <!-- Visibility shortcut -->
           <div class="form-row">
             <label class="form-label">可见性级别</label>
             <div class="visibility-tabs">
@@ -552,6 +564,34 @@ watch([showEdit, showBatch, showPathPicker], async () => {
             </div>
           </div>
 
+          <!-- VFS path -->
+          <div class="form-row">
+            <label class="form-label">VFS 路径</label>
+            <div class="path-input-row">
+              <input v-model="batchPath" type="text" class="form-input path-input" placeholder="如 /Files/shared" />
+              <button class="btn btn-outline btn-path-ref" @click="openPathPicker('batch')" title="引用已有路径">
+                <i data-lucide="folder-tree" class="btn-icon-left"></i>
+                引用
+              </button>
+            </div>
+          </div>
+
+          <!-- User selector (only shown for restricted mode) -->
+          <div v-if="batchVisibilityMode === 'restricted'" class="form-row">
+            <label class="form-label">授权给</label>
+            <div class="user-check-list">
+              <label v-for="u in users" :key="u.username" class="user-check-item">
+                <input
+                  type="checkbox"
+                  :checked="batchUsernames.includes(u.username)"
+                  @change="toggleBatchUser(u.username)"
+                />
+                <span>{{ u.username }}</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Permission checkboxes -->
           <div class="perm-grid">
             <label class="perm-check">
               <input type="checkbox" v-model="batchCanSee" />
@@ -822,7 +862,7 @@ watch([showEdit, showBatch, showPathPicker], async () => {
 
 .perm-table tr:hover td { background: #F9FAFB; }
 
-.col-user { width: 100px; }
+.col-user { width: 140px; }
 .col-path { width: auto; }
 .col-perm { width: 56px; text-align: center; }
 .col-actions { width: 80px; text-align: center; }
@@ -841,6 +881,16 @@ watch([showEdit, showBatch, showPathPicker], async () => {
   border-radius: 3px;
   font-size: 12px;
   font-weight: 500;
+}
+
+.user-badge-public {
+  background: #ECFDF5;
+  color: #059669;
+}
+
+.user-badge-login {
+  background: #FFF7ED;
+  color: #EA580C;
 }
 
 .perm-table code {

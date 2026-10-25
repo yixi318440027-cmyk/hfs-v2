@@ -7,9 +7,43 @@ interface User {
   role: string
 }
 
+const TOKEN_KEY = 'hfs_token'
+const USER_KEY = 'hfs_user'
+
+function loadPersisted(): { token: string | null; user: User | null } {
+  try {
+    const t = localStorage.getItem(TOKEN_KEY)
+    const u = localStorage.getItem(USER_KEY)
+    return {
+      token: t || null,
+      user: u ? JSON.parse(u) : null,
+    }
+  } catch {
+    return { token: null, user: null }
+  }
+}
+
+function persist(token: string | null, user: User | null) {
+  try {
+    if (token) {
+      localStorage.setItem(TOKEN_KEY, token)
+    } else {
+      localStorage.removeItem(TOKEN_KEY)
+    }
+    if (user) {
+      localStorage.setItem(USER_KEY, JSON.stringify(user))
+    } else {
+      localStorage.removeItem(USER_KEY)
+    }
+  } catch {
+    // localStorage unavailable (private browsing, etc.) — gracefully degrade
+  }
+}
+
 export const useAuthStore = defineStore('auth', () => {
-  const user = ref<User | null>(null)
-  const token = ref<string | null>(null)
+  const persisted = loadPersisted()
+  const user = ref<User | null>(persisted.user)
+  const token = ref<string | null>(persisted.token)
 
   const isLoggedIn = computed(() => !!token.value)
   const isAdmin = computed(() => user.value?.role === 'admin')
@@ -20,6 +54,7 @@ export const useAuthStore = defineStore('auth', () => {
       if (res.data.ok) {
         token.value = res.data.token
         user.value = res.data.user
+        persist(token.value, user.value)
         return true
       }
       return false
@@ -31,6 +66,7 @@ export const useAuthStore = defineStore('auth', () => {
   function logout() {
     token.value = null
     user.value = null
+    persist(null, null)
   }
 
   function checkAuth(): boolean {

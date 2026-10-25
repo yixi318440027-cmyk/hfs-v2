@@ -5,6 +5,12 @@ import (
 	"strings"
 )
 
+// Special usernames for visibility modes.
+const (
+	UserPublic = "*" // public: accessible by anyone, including anonymous
+	UserLogin  = "@" // login: accessible by any authenticated user
+)
+
 // Perm defines a single access right.
 type Perm int
 
@@ -58,8 +64,26 @@ func DefaultPerms() PermSet {
 	}
 }
 
+// DefaultPermsAnonymous returns the default permission set for an anonymous user
+// who has no explicit permission records: all denied.
+func DefaultPermsAnonymous() PermSet {
+	return PermSet{
+		CanSee:    false,
+		CanRead:   false,
+		CanList:   false,
+		CanUpload: false,
+		CanDelete: false,
+		CanArchive: false,
+	}
+}
+
 // Check returns the effective PermSet for a username and VFS path.
-// Inheritance: if no exact match is found, walks up parent paths until root.
+// Lookup order (most permissive first):
+//   1. Special user "*" (public — anyone, including anonymous)
+//   2. Special user "@" (login — any authenticated user)
+//   3. Exact username match
+//   4. Parent path inheritance (walk up the tree)
+//   5. DefaultPerms (see/read/list = true, others = false)
 // Admin users always get all permissions.
 func (e *Engine) Check(username, role, vfsPath string) PermSet {
 	// Admin bypasses all checks.
@@ -74,19 +98,38 @@ func (e *Engine) Check(username, role, vfsPath string) PermSet {
 		}
 	}
 
-	// Walk up the path hierarchy looking for a matching permission record.
 	path := cleanVFSPath(vfsPath)
+
+	// Walk up the path hierarchy looking for a matching permission record.
+	// Priority: public (*) > login (@) > specific user > default.
 	for {
-		ps, found := e.lookup(username, path)
-		if found {
+		// 1. Public access (anonymous or authenticated)
+		if ps, found := e.lookup(UserPublic, path); found {
 			return ps
 		}
+		// 2. Login-only access (any authenticated user)
+		if username != "" {
+			if ps, found := e.lookup(UserLogin, path); found {
+				return ps
+			}
+		}
+		// 3. Specific user
+		if username != "" {
+			if ps, found := e.lookup(username, path); found {
+				return ps
+			}
+		}
+
 		if path == "/" || path == "" {
 			break
 		}
 		path = parentPath(path)
 	}
 
+	// No matching record — use defaults based on auth status.
+	if username == "" {
+		return DefaultPermsAnonymous()
+	}
 	return DefaultPerms()
 }
 

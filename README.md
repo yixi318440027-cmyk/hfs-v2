@@ -5,7 +5,7 @@
 [![Go Version](https://img.shields.io/badge/Go-%3E%3D1.25-blue)](https://go.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
 
-当前版本：**v0.5.0**
+当前版本：**v0.6.1**
 
 ## 特性
 

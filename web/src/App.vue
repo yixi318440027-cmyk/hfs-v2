@@ -1,17 +1,14 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 import NavBar from './components/NavBar.vue'
 import FileTree from './components/FileTree.vue'
 import AdminSidebar from './components/AdminSidebar.vue'
 
-const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 
-// Fetch public roots for the sidebar when logged in
-const publicRootNames = ref<string[]>([])
 const fileRootNames = ref<string[]>(['Files'])
 
 // Determine if current route is admin

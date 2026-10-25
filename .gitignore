@@ -17,6 +17,10 @@ web/dist/
 *.db-wal
 *.db-shm
 
+# Runtime data (database / access log / uploaded files)
+data/
+
+
 # OS
 .DS_Store
 Thumbs.db

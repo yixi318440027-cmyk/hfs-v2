@@ -825,16 +825,23 @@ func (s *Server) handleAdminUpdateConfig(w http.ResponseWriter, r *http.Request)
 
 // --- Public VFS handlers (no auth) ---
 
-// handlePublicRoots handles GET /api/public/files/roots — returns only Public VFS roots.
+// handlePublicRoots handles GET /api/public/files/roots — returns VFS roots accessible publicly.
 func (s *Server) handlePublicRoots(w http.ResponseWriter, r *http.Request) {
-	roots := s.vfs.PublicRoots()
-	// Never return local filesystem paths to clients.
+	// Return all VFS roots that have a public (*) permission set at the root path.
+	// For backward compatibility, also check VFSRoot.Public flag.
+	roots := s.vfs.AllRoots()
 	type safeRoot struct {
 		Name string `json:"name"`
 	}
-	out := make([]safeRoot, len(roots))
-	for i, rt := range roots {
-		out[i] = safeRoot{Name: rt.Name}
+	var out []safeRoot
+	for _, rt := range roots {
+		// Check if this root is publicly accessible via permissions or config flag.
+		if rt.Public || s.perm.Can("", "", "/"+rt.Name, permission.PermList) {
+			out = append(out, safeRoot{Name: rt.Name})
+		}
+	}
+	if out == nil {
+		out = []safeRoot{}
 	}
 	jsonOK(w, out)
 }
@@ -843,8 +850,7 @@ func (s *Server) handlePublicRoots(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePublicListDir(w http.ResponseWriter, r *http.Request) {
 	vfsPath := r.URL.Query().Get("path")
 	if vfsPath == "" {
-		// Default to first public root
-		roots := s.vfs.PublicRoots()
+		roots := s.vfs.AllRoots()
 		if len(roots) == 0 {
 			jsonOK(w, &vfs.DirEntry{Path: "/", Files: []vfs.FileInfo{}, Total: 0})
 			return
@@ -852,7 +858,13 @@ func (s *Server) handlePublicListDir(w http.ResponseWriter, r *http.Request) {
 		vfsPath = "/" + roots[0].Name
 	}
 
-	entry, err := s.vfs.ListDirPublic(vfsPath)
+	// Check public permission via permission engine (anonymous user).
+	if !s.perm.Can("", "", vfsPath, permission.PermList) {
+		jsonError(w, http.StatusForbidden, "access denied")
+		return
+	}
+
+	entry, err := s.vfs.ListDir(vfsPath)
 	if err != nil {
 		jsonError(w, http.StatusForbidden, err.Error())
 		return
@@ -868,13 +880,15 @@ func (s *Server) handlePublicDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	localPath, root, err := s.vfs.GetFilePath(vfsPath)
-	if err != nil {
-		jsonError(w, http.StatusNotFound, err.Error())
+	// Check public permission via permission engine (anonymous user).
+	if !s.perm.Can("", "", vfsPath, permission.PermRead) {
+		jsonError(w, http.StatusForbidden, "access denied")
 		return
 	}
-	if !root.Public {
-		jsonError(w, http.StatusForbidden, "access denied")
+
+	localPath, _, err := s.vfs.GetFilePath(vfsPath)
+	if err != nil {
+		jsonError(w, http.StatusNotFound, err.Error())
 		return
 	}
 

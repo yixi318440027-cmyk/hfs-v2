@@ -59,6 +59,11 @@ func (v *VFS) PublicRoots() []config.VFSRoot {
 	return out
 }
 
+// AllRoots returns all VFSRoot entries.
+func (v *VFS) AllRoots() []config.VFSRoot {
+	return v.roots
+}
+
 // NewVFS creates a new VFS instance with the given roots.
 // It ensures all root directories exist on disk.
 func NewVFS(roots []config.VFSRoot) *VFS {

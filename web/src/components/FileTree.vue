@@ -87,7 +87,7 @@ async function toggleNode(node: TreeNode) {
 
 function isActive(node: TreeNode): boolean {
   return props.currentPath === node.path ||
-    (props.currentPath && props.currentPath.startsWith(node.path + '/'))
+    (!!props.currentPath && props.currentPath.startsWith(node.path + '/'))
 }
 
 function handleNavigate(node: TreeNode) {
